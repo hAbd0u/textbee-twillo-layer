@@ -10,4 +10,4 @@ api/tmp/
 .agents/
 graphify-out/
 node_modules/
-.qmd
+.qmd/
