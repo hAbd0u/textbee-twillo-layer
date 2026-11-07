@@ -1,0 +1,880 @@
+[
+  {
+    "endpointId": "GW-01",
+    "route": "/api/v1/gateway/send-sms",
+    "method": "POST",
+    "category": "sms-messaging",
+    "sourceReferences": {
+      "controller": "api/src/gateway/gateway.controller.ts:321",
+      "service": "api/src/gateway/gateway.service.ts:sendSMSDeviceless",
+      "dto": "api/src/gateway/gateway.dto.ts:377"
+    },
+    "authentication": {
+      "type": "ApiKeyOrBearer",
+      "header": "x-api-key",
+      "bearer": "Authorization: Bearer <token>",
+      "queryParamFallback": "apiKey",
+      "guard": "AuthGuard"
+    },
+    "requestSchema": {
+      "contentType": "application/json",
+      "schemaRef": "#/components/schemas/SendSMSRequestDTO",
+      "requiredFields": ["message", "recipients"],
+      "fields": {
+        "message": { "type": "string", "description": "Plain text SMS body", "required": true },
+        "recipients": { "type": "array", "items": "string", "description": "Recipient phone numbers", "required": true },
+        "deviceId": { "type": "string", "description": "Target Android device ObjectId", "required": false },
+        "simSubscriptionId": { "type": "number", "description": "SIM slot subscription ID", "required": false },
+        "scheduledAt": { "type": "string", "format": "date-time", "description": "Scheduled delivery time", "required": false },
+        "smsBody": { "type": "string", "deprecated": true },
+        "receivers": { "type": "array", "items": "string", "deprecated": true }
+      }
+    },
+    "responseSchema": {
+      "status": 200,
+      "contentType": "application/json",
+      "schemaRef": "#/components/schemas/SendSMSResponseDTO",
+      "structure": {
+        "data": {
+          "success": "boolean",
+          "message": "string",
+          "smsBatchId": "string",
+          "recipientCount": "number",
+          "estimatedCompletionAt": "string?",
+          "warning": "object?"
+        }
+      }
+    },
+    "relatedEntities": ["Device", "SMSBatch", "SMS", "User", "Subscription"],
+    "sideEffects": [
+      "Creates SMSBatch document in status pending",
+      "Creates individual SMS documents for each recipient",
+      "Enqueues job to Bull queue sms-send (queued mode) OR dispatches FCM push notification directly (direct mode)",
+      "Increments Device.sentSMSCount upon dispatch",
+      "Deducts from user daily/monthly quota"
+    ],
+    "verificationStatus": "Verified",
+    "knownLimitations": [
+      "Scheduling requires Redis/Bull queue enabled",
+      "Alphabet characters in recipients are strictly rejected with 400",
+      "Delivery acceptance is not carrier delivery confirmation (depends on phone radio state)"
+    ]
+  },
+  {
+    "endpointId": "GW-02",
+    "route": "/api/v1/gateway/send-bulk-sms",
+    "method": "POST",
+    "category": "sms-messaging",
+    "sourceReferences": {
+      "controller": "api/src/gateway/gateway.controller.ts:355",
+      "service": "api/src/gateway/gateway.service.ts:sendBulkSMSDeviceless",
+      "dto": "api/src/gateway/gateway.dto.ts:388"
+    },
+    "authentication": {
+      "type": "ApiKeyOrBearer",
+      "header": "x-api-key",
+      "guard": "AuthGuard"
+    },
+    "requestSchema": {
+      "contentType": "application/json",
+      "schemaRef": "#/components/schemas/SendBulkSMSRequestDTO",
+      "requiredFields": ["messages"],
+      "fields": {
+        "deviceId": { "type": "string", "required": false },
+        "messageTemplate": { "type": "string", "required": false },
+        "messages": {
+          "type": "array",
+          "items": {
+            "message": "string",
+            "recipients": "array<string>",
+            "simSubscriptionId": "number?"
+          },
+          "required": true
+        }
+      }
+    },
+    "responseSchema": {
+      "status": 200,
+      "contentType": "application/json",
+      "schemaRef": "#/components/schemas/SendSMSResponseDTO"
+    },
+    "relatedEntities": ["Device", "SMSBatch", "SMS", "User"],
+    "sideEffects": [
+      "Creates batch and messages in bulk",
+      "Enqueues wave-paced jobs in Bull queue or dispatches FCM pushes",
+      "Enforces bulk send plan limits"
+    ],
+    "verificationStatus": "Verified",
+    "knownLimitations": ["Large batches split into waves spaced by device send delay setting"]
+  },
+  {
+    "endpointId": "GW-03",
+    "route": "/api/v1/gateway/messages",
+    "method": "GET",
+    "category": "sms-messaging",
+    "sourceReferences": {
+      "controller": "api/src/gateway/gateway.controller.ts:584",
+      "service": "api/src/gateway/gateway.service.ts:getMessagesForUser",
+      "dto": "api/src/gateway/gateway.dto.ts:1396"
+    },
+    "authentication": {
+      "type": "ApiKeyOrBearer",
+      "header": "x-api-key",
+      "guard": "AuthGuard"
+    },
+    "requestSchema": {
+      "queryParams": {
+        "deviceIds": { "type": "string", "description": "Comma-separated ObjectIds, max 100" },
+        "direction": { "type": "string", "enum": ["all", "sent", "received"], "default": "all" },
+        "type": { "type": "string", "deprecated": true },
+        "smsBatchId": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "dispatched", "sent", "delivered", "failed", "unknown", "received"] },
+        "search": { "type": "string" },
+        "from": { "type": "string", "format": "date-time" },
+        "to": { "type": "string", "format": "date-time" },
+        "order": { "type": "string", "enum": ["desc", "asc"], "default": "desc" },
+        "page": { "type": "integer", "default": 1 },
+        "limit": { "type": "integer", "default": 50, "maximum": 100 },
+        "cursor": { "type": "string", "description": "Opaque position cursor for polling" }
+      }
+    },
+    "responseSchema": {
+      "status": 200,
+      "contentType": "application/json",
+      "schemaRef": "#/components/schemas/MessageListResponseDTO"
+    },
+    "relatedEntities": ["SMS", "Device"],
+    "sideEffects": [],
+    "verificationStatus": "Verified",
+    "knownLimitations": ["Naive datetimes without timezone offset are rejected outright with 400"]
+  },
+  {
+    "endpointId": "GW-04",
+    "route": "/api/v1/gateway/devices/:id/sms/:smsId",
+    "method": "GET",
+    "category": "sms-messaging",
+    "sourceReferences": {
+      "controller": "api/src/gateway/gateway.controller.ts:789",
+      "service": "api/src/gateway/gateway.service.ts:getSMSById"
+    },
+    "authentication": {
+      "type": "ApiKeyOrBearer",
+      "guards": ["AuthGuard", "CanModifyDevice"]
+    },
+    "requestSchema": {
+      "pathParams": {
+        "id": { "type": "string", "required": true },
+        "smsId": { "type": "string", "required": true }
+      }
+    },
+    "responseSchema": {
+      "status": 200,
+      "schemaRef": "#/components/schemas/SMSResponseDTO"
+    },
+    "relatedEntities": ["SMS", "Device"],
+    "sideEffects": [],
+    "verificationStatus": "Verified",
+    "knownLimitations": ["Device ownership validated via CanModifyDevice"]
+  },
+  {
+    "endpointId": "GW-05",
+    "route": "/api/v1/gateway/devices/:id/sms-batch/:smsBatchId",
+    "method": "GET",
+    "category": "sms-messaging",
+    "sourceReferences": {
+      "controller": "api/src/gateway/gateway.controller.ts:820",
+      "service": "api/src/gateway/gateway.service.ts:getSmsBatchById"
+    },
+    "authentication": {
+      "type": "ApiKeyOrBearer",
+      "guards": ["AuthGuard", "CanModifyDevice"]
+    },
+    "requestSchema": {
+      "pathParams": {
+        "id": { "type": "string", "required": true },
+        "smsBatchId": { "type": "string", "required": true }
+      }
+    },
+    "responseSchema": {
+      "status": 200,
+      "schemaRef": "#/components/schemas/SMSBatchResponseDTO"
+    },
+    "relatedEntities": ["SMSBatch", "SMS", "Device"],
+    "sideEffects": [],
+    "verificationStatus": "Verified",
+    "knownLimitations": ["Batch status counters dynamically recomputed from constituent messages"]
+  },
+  {
+    "endpointId": "GW-06",
+    "route": "/api/v1/gateway/devices/:id/messages/pending",
+    "method": "GET",
+    "category": "sms-messaging",
+    "sourceReferences": {
+      "controller": "api/src/gateway/gateway.controller.ts:735",
+      "service": "api/src/gateway/gateway.service.ts:claimPendingMessages"
+    },
+    "authentication": {
+      "type": "ApiKeyOrBearer",
+      "guards": ["AuthGuard", "CanModifyDevice"]
+    },
+    "requestSchema": {
+      "pathParams": { "id": { "type": "string", "required": true } }
+    },
+    "responseSchema": {
+      "status": 200,
+      "structure": { "data": "array<PendingSmsRecoveryPayload>" }
+    },
+    "relatedEntities": ["Device", "SMS"],
+    "sideEffects": [
+      "Atomically marks up to 25 messages as dispatched",
+      "Updates Device.lastPendingPollAt",
+      "Increments dispatchAttempts counter"
+    ],
+    "verificationStatus": "Verified",
+    "knownLimitations": [
+      "Rate-limited: maximum once every 5 minutes per device",
+      "Requires Android app version code >= 20"
+    ]
+  },
+  {
+    "endpointId": "GW-07",
+    "route": "/api/v1/gateway/devices/:id/sms-status",
+    "method": "PATCH",
+    "category": "sms-messaging",
+    "sourceReferences": {
+      "controller": "api/src/gateway/gateway.controller.ts:753",
+      "service": "api/src/gateway/gateway.service.ts:updateSMSStatus",
+      "dto": "api/src/gateway/gateway.dto.ts:1403"
+    },
+    "authentication": {
+      "type": "ApiKeyOrBearer",
+      "guards": ["AuthGuard", "CanModifyDevice"]
+    },
+    "requestSchema": {
+      "pathParams": { "id": { "type": "string", "required": true } },
+      "contentType": "application/json",
+      "requiredFields": ["smsId", "smsBatchId", "status"],
+      "fields": {
+        "smsId": { "type": "string", "required": true },
+        "smsBatchId": { "type": "string", "required": true },
+        "status": { "type": "string", "enum": ["sent", "delivered", "failed", "delivery_failed"], "required": true },
+        "sentAtInMillis": { "type": "number" },
+        "deliveredAtInMillis": { "type": "number" },
+        "failedAtInMillis": { "type": "number" },
+        "errorCode": { "type": "string" },
+        "errorMessage": { "type": "string" },
+        "pushReceivedAtInMillis": { "type": "number" },
+        "sendAttemptedAtInMillis": { "type": "number" },
+        "reportAttempt": { "type": "number" },
+        "simUsed": { "type": "object" }
+      }
+    },
+    "responseSchema": {
+      "status": 200,
+      "structure": { "data": { "success": "boolean", "message": "string" } }
+    },
+    "relatedEntities": ["SMS", "SMSBatch", "Device", "WebhookNotification"],
+    "sideEffects": [
+      "Updates message state and delivery timestamps",
+      "Recalculates batch statistics and status",
+      "Dispatches outgoing webhooks for matching subscribers"
+    ],
+    "verificationStatus": "Verified",
+    "knownLimitations": ["delivery_failed reports are appended to issueHistory without downgrading status to failed"]
+  },
+  {
+    "endpointId": "GW-08",
+    "route": "/api/v1/gateway/devices/:id/receive-sms",
+    "method": "POST",
+    "category": "sms-messaging",
+    "sourceReferences": {
+      "controller": "api/src/gateway/gateway.controller.ts:438",
+      "service": "api/src/gateway/gateway.service.ts:receiveSMS",
+      "dto": "api/src/gateway/gateway.dto.ts:458"
+    },
+    "authentication": {
+      "type": "ApiKeyOrBearer",
+      "guards": ["AuthGuard", "CanModifyDevice"]
+    },
+    "requestSchema": {
+      "pathParams": { "id": { "type": "string", "required": true } },
+      "contentType": "application/json",
+      "requiredFields": ["message"],
+      "fields": {
+        "message": { "type": "string", "required": true },
+        "sender": { "type": "string" },
+        "receivedAtInMillis": { "type": "number" },
+        "receivedAt": { "type": "string", "format": "date-time" },
+        "simUsed": { "type": "object" }
+      }
+    },
+    "responseSchema": {
+      "status": 200,
+      "structure": { "data": "SMS document OR { ignored: true, reason: string }" }
+    },
+    "relatedEntities": ["SMS", "Device", "WebhookNotification", "Subscription"],
+    "sideEffects": [
+      "Stores received SMS in database",
+      "Deduplicates within +-5 second window",
+      "Increments Device.receivedSMSCount",
+      "Triggers MESSAGE_RECEIVED webhook event"
+    ],
+    "verificationStatus": "Verified",
+    "knownLimitations": [
+      "Empty sender or message returns ignored: true without storing",
+      "Uploaded >48 hours late suppresses webhook delivery"
+    ]
+  },
+  {
+    "endpointId": "DEV-01",
+    "route": "/api/v1/gateway/stats",
+    "method": "GET",
+    "category": "devices",
+    "sourceReferences": {
+      "controller": "api/src/gateway/gateway.controller.ts:113",
+      "service": "api/src/gateway/gateway.service.ts:getStatsForUser"
+    },
+    "authentication": { "type": "ApiKeyOrBearer", "guard": "AuthGuard" },
+    "requestSchema": {},
+    "responseSchema": { "status": 200, "schemaRef": "#/components/schemas/GatewayStatsResponseDTO" },
+    "relatedEntities": ["Device", "SMS", "ApiKey"],
+    "sideEffects": [],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "DEV-02",
+    "route": "/api/v1/gateway/devices",
+    "method": "GET",
+    "category": "devices",
+    "sourceReferences": {
+      "controller": "api/src/gateway/gateway.controller.ts:170",
+      "service": "api/src/gateway/gateway.service.ts:getDevicesForUser"
+    },
+    "authentication": { "type": "ApiKeyOrBearer", "guard": "AuthGuard" },
+    "requestSchema": {},
+    "responseSchema": { "status": 200, "schemaRef": "#/components/schemas/DeviceListResponseDTO" },
+    "relatedEntities": ["Device"],
+    "sideEffects": [],
+    "verificationStatus": "Verified",
+    "knownLimitations": ["fcmToken and serial explicitly omitted from response"]
+  },
+  {
+    "endpointId": "DEV-03",
+    "route": "/api/v1/gateway/devices/:id",
+    "method": "GET",
+    "category": "devices",
+    "sourceReferences": {
+      "controller": "api/src/gateway/gateway.controller.ts:191",
+      "service": "api/src/gateway/gateway.service.ts:getDeviceById"
+    },
+    "authentication": { "type": "ApiKeyOrBearer", "guards": ["AuthGuard", "CanModifyDevice"] },
+    "requestSchema": { "pathParams": { "id": { "type": "string", "required": true } } },
+    "responseSchema": { "status": 200, "schemaRef": "#/components/schemas/DeviceResponseDTO" },
+    "relatedEntities": ["Device"],
+    "sideEffects": [],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "DEV-04",
+    "route": "/api/v1/gateway/devices",
+    "method": "POST",
+    "category": "devices",
+    "sourceReferences": {
+      "controller": "api/src/gateway/gateway.controller.ts:149",
+      "service": "api/src/gateway/gateway.service.ts:registerDevice",
+      "dto": "api/src/gateway/gateway.dto.ts:139"
+    },
+    "authentication": { "type": "ApiKeyOrBearer", "guard": "AuthGuard" },
+    "requestSchema": {
+      "contentType": "application/json",
+      "schemaRef": "#/components/schemas/RegisterDeviceInputDTO"
+    },
+    "responseSchema": { "status": 201, "schemaRef": "#/components/schemas/DeviceResponseDTO" },
+    "relatedEntities": ["Device", "User", "Plan"],
+    "sideEffects": [
+      "Creates new Device document",
+      "Enforces plan device limit ceiling",
+      "Sets isDefault: true if first device on account"
+    ],
+    "verificationStatus": "Verified",
+    "knownLimitations": ["Sanitized by pickDeviceWritableFields; untrusted fields dropped"]
+  },
+  {
+    "endpointId": "DEV-05",
+    "route": "/api/v1/gateway/devices/:id",
+    "method": "PATCH",
+    "category": "devices",
+    "sourceReferences": {
+      "controller": "api/src/gateway/gateway.controller.ts:216",
+      "service": "api/src/gateway/gateway.service.ts:updateDevice"
+    },
+    "authentication": { "type": "ApiKeyOrBearer", "guards": ["AuthGuard", "CanModifyDevice"] },
+    "requestSchema": {
+      "pathParams": { "id": { "type": "string", "required": true } },
+      "contentType": "application/json",
+      "schemaRef": "#/components/schemas/RegisterDeviceInputDTO"
+    },
+    "responseSchema": { "status": 200, "schemaRef": "#/components/schemas/DeviceResponseDTO" },
+    "relatedEntities": ["Device"],
+    "sideEffects": ["Updates writable device properties"],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "DEV-06",
+    "route": "/api/v1/gateway/devices/:id/heartbeat",
+    "method": "POST",
+    "category": "devices",
+    "sourceReferences": {
+      "controller": "api/src/gateway/gateway.controller.ts:244",
+      "service": "api/src/gateway/gateway.service.ts:heartbeat",
+      "dto": "api/src/gateway/gateway.dto.ts:1522"
+    },
+    "authentication": { "type": "ApiKeyOrBearer", "guards": ["AuthGuard", "CanModifyDevice"] },
+    "requestSchema": {
+      "pathParams": { "id": { "type": "string", "required": true } },
+      "contentType": "application/json",
+      "fields": {
+        "fcmToken": "string?",
+        "batteryPercentage": "number?",
+        "isCharging": "boolean?",
+        "networkType": "string?",
+        "simInfo": "object?",
+        "deviceUptimeMillis": "number?",
+        "memoryFreeBytes": "number?",
+        "storageAvailableBytes": "number?",
+        "hasSendSmsPermission": "boolean?"
+      }
+    },
+    "responseSchema": {
+      "status": 200,
+      "structure": {
+        "success": "boolean",
+        "fcmTokenUpdated": "boolean",
+        "lastHeartbeat": "string",
+        "name": "string?",
+        "pendingCount": "number",
+        "config": "object"
+      }
+    },
+    "relatedEntities": ["Device"],
+    "sideEffects": [
+      "Updates telemetry, battery, and lastHeartbeat",
+      "Refreshes user rollup on app upgrade"
+    ],
+    "verificationStatus": "Verified",
+    "knownLimitations": ["Returns pendingCount; if >0 Android executes RecoveryPoll"]
+  },
+  {
+    "endpointId": "DEV-07",
+    "route": "/api/v1/gateway/devices/:id/set-default",
+    "method": "POST",
+    "category": "devices",
+    "sourceReferences": {
+      "controller": "api/src/gateway/gateway.controller.ts:290",
+      "service": "api/src/gateway/gateway.service.ts:setDefaultDevice"
+    },
+    "authentication": { "type": "ApiKeyOrBearer", "guards": ["AuthGuard", "CanModifyDevice"] },
+    "requestSchema": { "pathParams": { "id": { "type": "string", "required": true } } },
+    "responseSchema": { "status": 200, "schemaRef": "#/components/schemas/DeviceResponseDTO" },
+    "relatedEntities": ["Device"],
+    "sideEffects": ["Sets isDefault: true on target, unsets on all sibling devices"],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "DEV-08",
+    "route": "/api/v1/gateway/devices/:id",
+    "method": "DELETE",
+    "category": "devices",
+    "sourceReferences": {
+      "controller": "api/src/gateway/gateway.controller.ts:268",
+      "service": "api/src/gateway/gateway.service.ts:deleteDevice"
+    },
+    "authentication": { "type": "ApiKeyOrBearer", "guards": ["AuthGuard", "CanModifyDevice"] },
+    "requestSchema": { "pathParams": { "id": { "type": "string", "required": true } } },
+    "responseSchema": { "status": 200, "structure": { "data": { "success": "boolean", "message": "string" } } },
+    "relatedEntities": ["Device", "DeviceTombstone"],
+    "sideEffects": ["Deletes device, writes DeviceTombstone record"],
+    "verificationStatus": "Verified",
+    "knownLimitations": ["Historical SMS records are retained"]
+  },
+  {
+    "endpointId": "DEV-09",
+    "route": "/api/v1/gateway/sms-permission-status",
+    "method": "GET",
+    "category": "devices",
+    "sourceReferences": {
+      "controller": "api/src/gateway/gateway.controller.ts:131",
+      "service": "api/src/gateway/gateway.service.ts:getSmsPermissionStatus"
+    },
+    "authentication": { "type": "ApiKeyOrBearer", "guard": "AuthGuard" },
+    "requestSchema": {},
+    "responseSchema": {
+      "status": 200,
+      "structure": { "data": { "permissionNeeded": "boolean", "source": "string?", "deviceId": "string?", "deviceName": "string?" } }
+    },
+    "relatedEntities": ["Device", "SMS"],
+    "sideEffects": [],
+    "verificationStatus": "Verified",
+    "knownLimitations": ["Inspects errors within last 7 days"]
+  },
+  {
+    "endpointId": "WH-01",
+    "route": "/api/v1/webhooks",
+    "method": "GET",
+    "category": "webhooks",
+    "sourceReferences": {
+      "controller": "api/src/webhook/webhook.controller.ts:79",
+      "service": "api/src/webhook/webhook.service.ts:findWebhooksForUser"
+    },
+    "authentication": { "type": "ApiKeyOrBearer", "guard": "AuthGuard" },
+    "requestSchema": {},
+    "responseSchema": { "status": 200, "schemaRef": "#/components/schemas/WebhookListResponseDTO" },
+    "relatedEntities": ["WebhookSubscription"],
+    "sideEffects": [],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "WH-02",
+    "route": "/api/v1/webhooks",
+    "method": "POST",
+    "category": "webhooks",
+    "sourceReferences": {
+      "controller": "api/src/webhook/webhook.controller.ts:220",
+      "service": "api/src/webhook/webhook.service.ts:create",
+      "dto": "api/src/webhook/webhook.dto.ts:5"
+    },
+    "authentication": { "type": "ApiKeyOrBearer", "guard": "AuthGuard" },
+    "requestSchema": {
+      "contentType": "application/json",
+      "schemaRef": "#/components/schemas/CreateWebhookDto",
+      "requiredFields": ["deliveryUrl", "events", "signingSecret"]
+    },
+    "responseSchema": { "status": 201, "schemaRef": "#/components/schemas/WebhookResponseDTO" },
+    "relatedEntities": ["WebhookSubscription", "User", "Plan"],
+    "sideEffects": ["Creates WebhookSubscription document", "Validates URL against SSRF"],
+    "verificationStatus": "Verified",
+    "knownLimitations": ["signingSecret must be at least 20 chars; private IPs blocked"]
+  },
+  {
+    "endpointId": "WH-03",
+    "route": "/api/v1/webhooks/:webhookId",
+    "method": "GET",
+    "category": "webhooks",
+    "sourceReferences": {
+      "controller": "api/src/webhook/webhook.controller.ts:194",
+      "service": "api/src/webhook/webhook.service.ts:findOne"
+    },
+    "authentication": { "type": "ApiKeyOrBearer", "guard": "AuthGuard" },
+    "requestSchema": { "pathParams": { "webhookId": { "type": "string", "required": true } } },
+    "responseSchema": { "status": 200, "schemaRef": "#/components/schemas/WebhookResponseDTO" },
+    "relatedEntities": ["WebhookSubscription"],
+    "sideEffects": [],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "WH-04",
+    "route": "/api/v1/webhooks/:webhookId",
+    "method": "PATCH",
+    "category": "webhooks",
+    "sourceReferences": {
+      "controller": "api/src/webhook/webhook.controller.ts:251",
+      "service": "api/src/webhook/webhook.service.ts:update",
+      "dto": "api/src/webhook/webhook.dto.ts:41"
+    },
+    "authentication": { "type": "ApiKeyOrBearer", "guard": "AuthGuard" },
+    "requestSchema": {
+      "pathParams": { "webhookId": { "type": "string", "required": true } },
+      "contentType": "application/json",
+      "schemaRef": "#/components/schemas/UpdateWebhookDto"
+    },
+    "responseSchema": { "status": 200, "schemaRef": "#/components/schemas/WebhookResponseDTO" },
+    "relatedEntities": ["WebhookSubscription"],
+    "sideEffects": ["Updates subscription properties"],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "WH-05",
+    "route": "/api/v1/webhooks/:webhookId",
+    "method": "DELETE",
+    "category": "webhooks",
+    "sourceReferences": {
+      "controller": "api/src/webhook/webhook.controller.ts:279",
+      "service": "api/src/webhook/webhook.service.ts:remove"
+    },
+    "authentication": { "type": "ApiKeyOrBearer", "guard": "AuthGuard" },
+    "requestSchema": { "pathParams": { "webhookId": { "type": "string", "required": true } } },
+    "responseSchema": { "status": 200, "schemaRef": "#/components/schemas/WebhookDeletedResponseDTO" },
+    "relatedEntities": ["WebhookSubscription"],
+    "sideEffects": ["Soft-deletes subscription (sets deletedAt)"],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "WH-06",
+    "route": "/api/v1/webhooks/notifications",
+    "method": "GET",
+    "category": "webhooks",
+    "sourceReferences": {
+      "controller": "api/src/webhook/webhook.controller.ts:155",
+      "service": "api/src/webhook/webhook.service.ts:findWebhookNotificationsForUser"
+    },
+    "authentication": { "type": "ApiKeyOrBearer", "guard": "AuthGuard" },
+    "requestSchema": {
+      "queryParams": {
+        "page": { "type": "number", "default": 1 },
+        "limit": { "type": "number", "default": 10 },
+        "status": { "type": "string" },
+        "eventType": { "type": "string" },
+        "deviceId": { "type": "string" },
+        "webhookSubscriptionId": { "type": "string" },
+        "start": { "type": "string" },
+        "end": { "type": "string" }
+      }
+    },
+    "responseSchema": { "status": 200, "schemaRef": "#/components/schemas/WebhookNotificationListResponseDTO" },
+    "relatedEntities": ["WebhookNotification"],
+    "sideEffects": [],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "AUTH-01",
+    "route": "/api/v1/auth/login",
+    "method": "POST",
+    "category": "authentication",
+    "sourceReferences": {
+      "controller": "api/src/auth/auth.controller.ts:85",
+      "service": "api/src/auth/auth.service.ts:login",
+      "dto": "api/src/auth/auth.dto.ts:277"
+    },
+    "authentication": { "type": "Public", "turnstile": true },
+    "requestSchema": {
+      "contentType": "application/json",
+      "requiredFields": ["email", "password"],
+      "fields": { "email": "string", "password": "string", "turnstileToken": "string?", "client": "object?" }
+    },
+    "responseSchema": { "status": 200, "schemaRef": "#/components/schemas/AuthSessionResponseDTO" },
+    "relatedEntities": ["User", "AccessFootprint"],
+    "sideEffects": ["Updates User.lastLoginAt", "Records AccessFootprint"],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "AUTH-02",
+    "route": "/api/v1/auth/google-login",
+    "method": "POST",
+    "category": "authentication",
+    "sourceReferences": {
+      "controller": "api/src/auth/auth.controller.ts:110",
+      "service": "api/src/auth/auth.service.ts:loginWithGoogle"
+    },
+    "authentication": { "type": "Public", "googleIdToken": true },
+    "requestSchema": {
+      "contentType": "application/json",
+      "requiredFields": ["idToken"],
+      "fields": { "idToken": "string", "attribution": "object?", "client": "object?" }
+    },
+    "responseSchema": { "status": 200, "schemaRef": "#/components/schemas/AuthSessionResponseDTO" },
+    "relatedEntities": ["User"],
+    "sideEffects": ["Provisions user if first sign in"],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "AUTH-03",
+    "route": "/api/v1/auth/register",
+    "method": "POST",
+    "category": "authentication",
+    "sourceReferences": {
+      "controller": "api/src/auth/auth.controller.ts:133",
+      "service": "api/src/auth/auth.service.ts:register"
+    },
+    "authentication": { "type": "Public", "turnstile": true },
+    "requestSchema": {
+      "contentType": "application/json",
+      "requiredFields": ["name", "email", "password"],
+      "fields": { "name": "string", "email": "string", "password": "string", "turnstileToken": "string?", "attribution": "object?", "client": "object?" }
+    },
+    "responseSchema": { "status": 201, "schemaRef": "#/components/schemas/AuthSessionResponseDTO" },
+    "relatedEntities": ["User", "Subscription", "EmailVerification"],
+    "sideEffects": ["Creates User", "Initializes free tier Subscription", "Sends verification email"],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "AUTH-04",
+    "route": "/api/v1/auth/who-am-i",
+    "method": "GET",
+    "category": "authentication",
+    "sourceReferences": { "controller": "api/src/auth/auth.controller.ts:156" },
+    "authentication": { "type": "ApiKeyOrBearer", "guard": "AuthGuard" },
+    "requestSchema": {},
+    "responseSchema": { "status": 200, "schemaRef": "#/components/schemas/UserResponseDTO" },
+    "relatedEntities": ["User"],
+    "sideEffects": ["Tracks access log footprint"],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "AUTH-07",
+    "route": "/api/v1/auth/api-keys",
+    "method": "POST",
+    "category": "authentication",
+    "sourceReferences": { "controller": "api/src/auth/auth.controller.ts:220", "service": "api/src/auth/auth.service.ts:generateApiKey" },
+    "authentication": { "type": "ApiKeyOrBearer", "guard": "AuthGuard" },
+    "requestSchema": {},
+    "responseSchema": { "status": 201, "schemaRef": "#/components/schemas/ApiKeyCreatedResponseDTO" },
+    "relatedEntities": ["ApiKey", "User"],
+    "sideEffects": ["Generates unhashed key once, stores SHA-256 and bcrypt hashes"],
+    "verificationStatus": "Verified",
+    "knownLimitations": ["Raw key shown only in creation response"]
+  },
+  {
+    "endpointId": "AUTH-08",
+    "route": "/api/v1/auth/api-keys",
+    "method": "GET",
+    "category": "authentication",
+    "sourceReferences": { "controller": "api/src/auth/auth.controller.ts:247" },
+    "authentication": { "type": "ApiKeyOrBearer", "guard": "AuthGuard" },
+    "requestSchema": { "queryParams": { "status": { "type": "string", "enum": ["active", "revoked", "all"], "default": "active" } } },
+    "responseSchema": { "status": 200, "schemaRef": "#/components/schemas/ApiKeyListResponseDTO" },
+    "relatedEntities": ["ApiKey"],
+    "sideEffects": [],
+    "verificationStatus": "Verified",
+    "knownLimitations": ["Returns masked representation only"]
+  },
+  {
+    "endpointId": "AUTH-09",
+    "route": "/api/v1/auth/api-keys/:id",
+    "method": "DELETE",
+    "category": "authentication",
+    "sourceReferences": { "controller": "api/src/auth/auth.controller.ts:273" },
+    "authentication": { "type": "ApiKeyOrBearer", "guards": ["AuthGuard", "CanModifyApiKey"] },
+    "requestSchema": { "pathParams": { "id": { "type": "string", "required": true } } },
+    "responseSchema": { "status": 200, "structure": { "message": "string" } },
+    "relatedEntities": ["ApiKey", "ApiKeyTombstone"],
+    "sideEffects": ["Permanently deletes key and records ApiKeyTombstone"],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "AUTH-10",
+    "route": "/api/v1/auth/api-keys/:id/revoke",
+    "method": "POST",
+    "category": "authentication",
+    "sourceReferences": { "controller": "api/src/auth/auth.controller.ts:296" },
+    "authentication": { "type": "ApiKeyOrBearer", "guards": ["AuthGuard", "CanModifyApiKey"] },
+    "requestSchema": { "pathParams": { "id": { "type": "string", "required": true } } },
+    "responseSchema": { "status": 200, "structure": { "message": "string" } },
+    "relatedEntities": ["ApiKey"],
+    "sideEffects": ["Sets revokedAt timestamp; prevents any further authentication"],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "BILL-01",
+    "route": "/api/v1/billing/plans",
+    "method": "GET",
+    "category": "billing",
+    "sourceReferences": { "controller": "api/src/billing/billing.controller.ts:58", "service": "api/src/billing/billing.service.ts:getPlans" },
+    "authentication": { "type": "Public" },
+    "requestSchema": {},
+    "responseSchema": { "status": 200, "structure": "array<PlanDTO>" },
+    "relatedEntities": ["Plan"],
+    "sideEffects": [],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "BILL-02",
+    "route": "/api/v1/billing/current-subscription",
+    "method": "GET",
+    "category": "billing",
+    "sourceReferences": { "controller": "api/src/billing/billing.controller.ts:78", "service": "api/src/billing/billing.service.ts:getCurrentSubscription" },
+    "authentication": { "type": "ApiKeyOrBearer", "guard": "AuthGuard" },
+    "requestSchema": {},
+    "responseSchema": { "status": 200, "structure": { "subscription": "object", "usage": "object" } },
+    "relatedEntities": ["Subscription", "Plan", "SMS"],
+    "sideEffects": [],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "BILL-09",
+    "route": "/api/v1/billing/webhook/polar",
+    "method": "POST",
+    "category": "billing",
+    "sourceReferences": { "controller": "api/src/billing/billing.controller.ts:203", "service": "api/src/billing/billing.service.ts:validatePolarWebhookPayload" },
+    "authentication": { "type": "PolarWebhookHmac" },
+    "requestSchema": { "contentType": "application/json", "rawBody": true },
+    "responseSchema": { "status": 200 },
+    "relatedEntities": ["Subscription", "PolarWebhookPayload", "User"],
+    "sideEffects": ["Syncs subscription active/past_due/canceled/revoked status"],
+    "verificationStatus": "Verified",
+    "knownLimitations": ["Raw body required for HMAC verification"]
+  },
+  {
+    "endpointId": "SUP-01",
+    "route": "/api/v1/support/customer-support",
+    "method": "POST",
+    "category": "support",
+    "sourceReferences": { "controller": "api/src/support/support.controller.ts:55", "dto": "api/src/support/dto/create-support-message.dto.ts:18" },
+    "authentication": { "type": "ApiKeyOrBearer", "guard": "AuthGuard", "turnstile": true },
+    "requestSchema": { "contentType": "application/json", "requiredFields": ["name", "email", "category", "message", "turnstileToken"] },
+    "responseSchema": { "status": 201, "structure": { "message": "string" } },
+    "relatedEntities": ["SupportMessage", "User"],
+    "sideEffects": ["Stores support message, sends email confirmation"],
+    "verificationStatus": "Verified",
+    "knownLimitations": []
+  },
+  {
+    "endpointId": "SUP-02",
+    "route": "/api/v1/support/request-account-deletion",
+    "method": "POST",
+    "category": "support",
+    "sourceReferences": { "controller": "api/src/support/support.controller.ts:89" },
+    "authentication": { "type": "JwtOnly", "guard": "JwtAuthGuard", "turnstile": true },
+    "requestSchema": { "contentType": "application/json", "requiredFields": ["message", "turnstileToken"] },
+    "responseSchema": { "status": 201, "structure": { "message": "string" } },
+    "relatedEntities": ["User", "SupportMessage"],
+    "sideEffects": ["Records User.accountDeletionRequestedAt"],
+    "verificationStatus": "Verified",
+    "knownLimitations": ["Strictly forbids API Key access; dashboard session token required"]
+  },
+  {
+    "endpointId": "NOTIF-01",
+    "route": "/api/v1/notifications/feed",
+    "method": "GET",
+    "category": "notifications",
+    "sourceReferences": { "controller": "api/src/notifications/notifications.controller.ts:61" },
+    "authentication": { "type": "JwtOnly", "guard": "AuthGuard" },
+    "requestSchema": {},
+    "responseSchema": { "status": 200, "structure": { "items": "array<NotificationItem>" } },
+    "relatedEntities": ["DashboardNotification", "NotificationState", "User"],
+    "sideEffects": [],
+    "verificationStatus": "Verified",
+    "knownLimitations": ["Engine renders targeted dashboard alert banners"]
+  },
+  {
+    "endpointId": "MAIL-04",
+    "route": "/api/v1/email/ses-events",
+    "method": "POST",
+    "category": "mail",
+    "sourceReferences": { "controller": "api/src/mail/email.controller.ts:83", "service": "api/src/mail/ses-events.service.ts:handle" },
+    "authentication": { "type": "AwsSnsSignature" },
+    "requestSchema": { "contentType": "text/plain", "limit": "256kb" },
+    "responseSchema": { "status": 200 },
+    "relatedEntities": ["EmailSuppression", "SentEmail"],
+    "sideEffects": ["Adds hard bounces and complaints to EmailSuppression"],
+    "verificationStatus": "Verified",
+    "knownLimitations": ["Parses raw SNS JSON payload sent as text/plain"]
+  }
+]
+
