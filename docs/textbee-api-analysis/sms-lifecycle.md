@@ -8,12 +8,17 @@ This document provides a comprehensive, end-to-end trace of how SMS messages flo
 
 The outbound SMS lifecycle spans external API clients, the backend orchestration engine, Google Firebase Cloud Messaging, Android WorkManager background tasks, and physical cellular radio transceivers.
 
+![Outbound SMS Transmission Sequence](./diagrams/sms-lifecycle-outbound-sequence.svg)
+
+<details>
+<summary>View Mermaid Source</summary>
+
 ```mermaid
 sequenceDiagram
     autonumber
     actor Client as External Application
     participant API as TextBee Backend API
-    participant Queue as Redis / Bull Queue
+    participant Queue as Redis Bull Queue
     participant FCM as Firebase Cloud Messaging
     participant Phone as Android Gateway App
     participant Radio as Cellular Radio (SIM)
@@ -21,16 +26,16 @@ sequenceDiagram
     participant WH as Webhook Receiver
 
     Client->>API: POST /api/v1/gateway/send-sms (x-api-key)
-    Note over API: AuthGuard validates API key<br/>Check quotas & device availability
+    Note over API: AuthGuard validates API key<br/>Check quotas and device availability
     API->>API: Create SMSBatch & SMS records (status: pending)
     
     alt Asynchronous Mode (Queue Enabled)
         API->>Queue: Enqueue send job (Wave plan & send delay)
-        API-->>Client: HTTP 200 { success: true, smsBatchId }
+        API-->>Client: HTTP 200 (success: true, smsBatchId)
         Queue->>FCM: Dispatch FCM Push (fcmToken, smsData)
     else Direct Mode (Queue Disabled)
         API->>FCM: Send FCM Push (sendEach)
-        API-->>Client: HTTP 200 { successCount, smsBatchId }
+        API-->>Client: HTTP 200 (successCount, smsBatchId)
     end
 
     FCM->>Phone: High-priority data push (onMessageReceived)
@@ -57,6 +62,7 @@ sequenceDiagram
         API->>WH: POST Webhook (event: MESSAGE_DELIVERED)
     end
 ```
+</details>
 
 ---
 
@@ -137,6 +143,11 @@ sequenceDiagram
 
 ## 3. Inbound SMS Lifecycle
 
+![Inbound SMS Reception Sequence](./diagrams/sms-lifecycle-inbound-sequence.svg)
+
+<details>
+<summary>View Mermaid Source</summary>
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -152,11 +163,12 @@ sequenceDiagram
     Receiver->>Receiver: Check receiveSMSEnabled
     Receiver->>Worker: WorkManager.enqueueUniqueWork(sms_received_fingerprint)
     Worker->>API: POST /gateway/devices/:id/receive-sms (x-api-key)
-    Note over API: Deduplicate within +-5s window<br/>Check inbound plan quota
+    Note over API: Deduplicate within 5s window<br/>Check inbound plan quota
     API->>API: Persist SMS document (type: received, status: received)
     API->>WH: POST Webhook (event: MESSAGE_RECEIVED)
-    API-->>Worker: HTTP 200 { data: SMS }
+    API-->>Worker: HTTP 200 (data: SMS)
 ```
+</details>
 
 ### Inbound Edge Cases & Verification Details
 1. **Deduplication Window:** Android carrier radios occasionally trigger multiple broadcast intents for multipart messages. Backend checks `(device, type: 'received', sender, message)` within $\pm 5$ seconds (`toleranceMs = 5000`). If a match is found, the existing record is returned without duplicating webhook dispatches.
@@ -169,6 +181,21 @@ sequenceDiagram
 ---
 
 ## 4. Message Status State Machine
+
+![SMS Status State Machine](./diagrams/sms-lifecycle-status-state-machine.svg)
+
+<details>
+<summary>View Mermaid Source</summary>
+
+```mermaid
+flowchart TD
+    pending["pending<br/>(Created in DB)"] -->|"Dispatched to Bull / FCM"| dispatched["dispatched<br/>(Push Sent / Claimed by phone)"]
+    dispatched -->|"Radio OK (RESULT_OK)"| sent["sent<br/>(Cellular Radio Transmitted)"]
+    dispatched -->|"Radio Error / Push Timeout"| failed["failed<br/>(Radio Error, Airplane Mode, etc.)"]
+    sent -->|"Carrier Report (RESULT_OK)"| delivered["delivered<br/>(Confirmed Delivered)"]
+    sent -->|"Delivery Report Canceled"| sent
+```
+</details>
 
 ```
               ┌──────────────┐

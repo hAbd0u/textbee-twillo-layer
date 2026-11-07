@@ -82,4 +82,5 @@ The documentation is organized into modular technical specifications:
 11. [Feature Capabilities & Limits](file:///e:/projects/textbee/docs/textbee-api-analysis/feature-capabilities.md): Verified capabilities, constraints, SIM handling, quotas, and limits.
 12. [Findings & Gaps](file:///e:/projects/textbee/docs/textbee-api-analysis/findings-and-gaps.md): Idiosyncrasies, deprecated paths, security notes, and architectural edge cases.
 13. [Source References](file:///e:/projects/textbee/docs/textbee-api-analysis/source-references.md): Direct source file and line traceability matrix.
+14. [Vector Diagrams Suite (diagrams/)](file:///e:/projects/textbee/docs/textbee-api-analysis/diagrams): Standalone high-resolution vector SVGs for all architectural topologies, ER models, sequence flows, and state machines.
 

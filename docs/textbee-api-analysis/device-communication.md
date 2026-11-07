@@ -8,42 +8,48 @@ This document details the bidirectional communication architecture between the T
 
 The TextBee device communication model uses an asymmetric bidirectional architecture:
 
+![TextBee Device Communication Architecture](./diagrams/device-communication-protocol.svg)
+
+<details>
+<summary>View Mermaid Source</summary>
+
 ```mermaid
 flowchart TD
-    subgraph Cloud Infrastructure
-        API[TextBee NestJS Backend API]
-        FCM[Firebase Cloud Messaging - FCM]
-        Redis[Redis / Bull Queue]
+    subgraph Cloud_Infrastructure ["Cloud Infrastructure"]
+        API["TextBee NestJS Backend API"]
+        FCM["Firebase Cloud Messaging (FCM)"]
+        Redis["Redis / Bull Queue"]
     end
 
-    subgraph Android Gateway Device
-        FCMReceiver[FCM Service<br/>com.vernu.sms.services.FCMService]
-        WM[Android WorkManager Engine]
-        SendWorker[SmsSendWorker]
-        StatusWorker[SMSStatusUpdateWorker]
-        RecvWorker[SMSReceivedWorker]
-        HBWorker[HeartbeatWorker]
-        Tele[Telemetry & Health Collector]
-        SmsMgr[Android SmsManager / Telephony RIL]
-        SharedPrefs[Encrypted SharedPreferences]
+    subgraph Android_Gateway_Device ["Android Gateway Device"]
+        FCMReceiver["FCM Service<br/>com.vernu.sms.services.FCMService"]
+        WM["Android WorkManager Engine"]
+        SendWorker["SmsSendWorker"]
+        StatusWorker["SMSStatusUpdateWorker"]
+        RecvWorker["SMSReceivedWorker"]
+        HBWorker["HeartbeatWorker"]
+        Tele["Telemetry & Health Collector"]
+        SmsMgr["Android SmsManager / Telephony RIL"]
+        SharedPrefs["Encrypted SharedPreferences"]
     end
 
     %% Downlink
-    API -->|1. Push Dispatch| FCM
-    FCM -->|2. High-Priority Data Push| FCMReceiver
-    FCMReceiver -->|3. Enqueue Send| WM
+    API -->|"1. Push Dispatch"| FCM
+    FCM -->|"2. High-Priority Data Push"| FCMReceiver
+    FCMReceiver -->|"3. Enqueue Send"| WM
     WM --> SendWorker
-    SendWorker -->|4. Carrier Broadcast| SmsMgr
+    SendWorker -->|"4. Carrier Broadcast"| SmsMgr
 
     %% Uplink
-    SmsMgr -->|5. Carrier Intent Callback| StatusWorker
-    StatusWorker -->|6. PATCH /sms-status| API
-    RecvWorker -->|7. POST /receive-sms| API
-    HBWorker -->|8. POST /heartbeat| API
+    SmsMgr -->|"5. Carrier Intent Callback"| StatusWorker
+    StatusWorker -->|"6. PATCH /sms-status"| API
+    RecvWorker -->|"7. POST /receive-sms"| API
+    HBWorker -->|"8. POST /heartbeat"| API
     Tele --> HBWorker
-    API -->|9. pendingCount > 0| HBWorker
-    HBWorker -->|10. GET /messages/pending| API
+    API -->|"9. pendingCount > 0"| HBWorker
+    HBWorker -->|"10. GET /messages/pending"| API
 ```
+</details>
 
 | Direction | Primary Transport | Auxiliary Transport | Authentication / Security |
 |---|---|---|---|
@@ -359,22 +365,28 @@ Dispatched via `SMSStatusUpdateWorker` following intent callbacks from the Andro
 
 #### Telephony Result Mappings:
 
+![Android Telephony Result Mappings](./diagrams/device-telephony-result-mappings.svg)
+
+<details>
+<summary>View Mermaid Source</summary>
+
 ```mermaid
 stateDiagram-v2
     [*] --> SmsManager_sendMultipartTextMessage
 
     SmsManager_sendMultipartTextMessage --> Activity_RESULT_OK: sentIntent Triggered
-    Activity_RESULT_OK --> status_sent: HTTP PATCH status="sent"
+    Activity_RESULT_OK --> status_sent: HTTP PATCH status sent
 
-    SmsManager_sendMultipartTextMessage --> Activity_RESULT_ERROR_*: sentIntent Triggered
-    Activity_RESULT_ERROR_* --> status_failed: HTTP PATCH status="failed"<br/>smsManagerResultCode=X
+    SmsManager_sendMultipartTextMessage --> Activity_RESULT_ERROR: sentIntent Triggered (Result Error)
+    Activity_RESULT_ERROR --> status_failed: HTTP PATCH status failed
 
     status_sent --> DeliveryIntent_OK: deliveryIntent Triggered
-    DeliveryIntent_OK --> status_delivered: HTTP PATCH status="delivered"
+    DeliveryIntent_OK --> status_delivered: HTTP PATCH status delivered
 
     status_sent --> DeliveryIntent_FAIL: deliveryIntent Triggered
-    DeliveryIntent_FAIL --> append_issue_history: HTTP PATCH status="delivery_failed"<br/>(sent preserved, issue appended)
+    DeliveryIntent_FAIL --> append_issue_history: HTTP PATCH delivery failed (appended to issue history)
 ```
+</details>
 
 ### 7.2 Worker Retry Policy (`WorkerRetryPolicy.kt`)
 

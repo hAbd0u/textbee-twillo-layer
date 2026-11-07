@@ -4,56 +4,61 @@
 
 TextBee operates as an asynchronous, distributed gateway system. The core design challenge it addresses is turning consumer and enterprise Android hardware into highly reliable, programmatic SMS transmission relays while surviving Android's OS-level power optimizations, background execution constraints, and cellular carrier throttling.
 
+![TextBee Architecture & Subsystem Topology](./diagrams/architecture-system-topology.svg)
+
+<details>
+<summary>View Mermaid Source</summary>
+
 ```mermaid
 flowchart TD
     subgraph Clients["Clients & Consumers"]
-        ExtAPI["External Applications\n(REST API via x-api-key)"]
-        Dashboard["Web Dashboard\n(Next.js 16 via JWT)"]
-        Polar["Polar.sh Billing\n(Inbound Webhooks)"]
-        SES["AWS SES/SNS\n(Email Events)"]
+        ExtAPI["External Applications<br/>(REST API via x-api-key)"]
+        Dashboard["Web Dashboard<br/>(Next.js 16 via JWT)"]
+        Polar["Polar.sh Billing<br/>(Inbound Webhooks)"]
+        SES["AWS SES/SNS<br/>(Email Events)"]
     end
 
     subgraph Backend["TextBee NestJS Backend Engine"]
-        Router["Express / NestJS Router\n(/api/v1/*)"]
-        Guard["Auth & Throttler Guards\n(AuthGuard / CanModifyDevice)"]
+        Router["Express / NestJS Router<br/>(/api/v1/*)"]
+        Guard["Auth & Throttler Guards<br/>(AuthGuard / CanModifyDevice)"]
         
         subgraph CoreServices["Application Services"]
-            GatewaySvc["GatewayService\n(SMS & Device Logic)"]
-            AuthSvc["AuthService\n(JWT & API Keys)"]
-            BillingSvc["BillingService\n(Plans & Usage)"]
-            WebhookSvc["WebhookService\n(Fan-out & Signing)"]
-            NotifSvc["NotificationsService\n(Feed & Engine)"]
+            GatewaySvc["GatewayService<br/>(SMS & Device Logic)"]
+            AuthSvc["AuthService<br/>(JWT & API Keys)"]
+            BillingSvc["BillingService<br/>(Plans & Usage)"]
+            WebhookSvc["WebhookService<br/>(Fan-out & Signing)"]
+            NotifSvc["NotificationsService<br/>(Feed & Engine)"]
         end
 
         subgraph Queues["Async Processing (Redis / Bull)"]
-            SMSQueue["SMS Send Queue\n(sms-queue.processor)"]
-            WHQueue["Webhook Delivery Queue\n(webhook-queue.processor)"]
-            BillQueue["Billing Notification Queue\n(billing-notifications.processor)"]
+            SMSQueue["SMS Send Queue<br/>(sms-queue.processor)"]
+            WHQueue["Webhook Delivery Queue<br/>(webhook-queue.processor)"]
+            BillQueue["Billing Notification Queue<br/>(billing-notifications.processor)"]
         end
 
-        subgraph Crons["Scheduled Tasks (@nestjs/schedule)"]
-            TimeoutTask["SMS Timeout Sweep (every 5m)\n(sms-status-update.task)"]
-            HeartbeatTask["Stale Heartbeat Push (hourly)\n(heartbeat-check.task)"]
-            WHRetryTask["Webhook Retry Sweep (every 5m)\n(webhook.service)"]
-            UserRollupTask["User Rollup Task (nightly)\n(user-rollup.task)"]
+        subgraph Crons["Scheduled Tasks"]
+            TimeoutTask["SMS Timeout Sweep (every 5m)<br/>(sms-status-update.task)"]
+            HeartbeatTask["Stale Heartbeat Push (hourly)<br/>(heartbeat-check.task)"]
+            WHRetryTask["Webhook Retry Sweep (every 5m)<br/>(webhook.service)"]
+            UserRollupTask["User Rollup Task (nightly)<br/>(user-rollup.task)"]
         end
     end
 
     subgraph Persistence["Persistence Tier"]
-        MongoDB[("MongoDB Database\n(Users, Devices, SMS, Batches, Webhooks)")]
-        RedisDB[("Redis Store\n(Bull Queues & Cache)")]
+        MongoDB[("MongoDB Database<br/>(Users, Devices, SMS, Batches, Webhooks)")]
+        RedisDB[("Redis Store<br/>(Bull Queues & Cache)")]
     end
 
     subgraph PushService["Push Notification Infrastructure"]
-        FCM["Firebase Cloud Messaging\n(sendEach API)"]
+        FCM["Firebase Cloud Messaging<br/>(sendEach API)"]
     end
 
     subgraph Android["Android Gateway Devices"]
-        FCMReceiver["FCMService\n(onMessageReceived)"]
-        WorkMgr["WorkManager Engine\n(SmsSendWorker / StatusWorker)"]
-        Radio["Android SmsManager\n(Physical SIM Radio)"]
-        InboundReceiver["SMSBroadcastReceiver\n(Carrier SMS Ingest)"]
-        HeartbeatHelper["HeartbeatHelper\n(Telemetry & Diagnostics)"]
+        FCMReceiver["FCMService<br/>(onMessageReceived)"]
+        WorkMgr["WorkManager Engine<br/>(SmsSendWorker / StatusWorker)"]
+        Radio["Android SmsManager<br/>(Physical SIM Radio)"]
+        InboundReceiver["SMSBroadcastReceiver<br/>(Carrier SMS Ingest)"]
+        HeartbeatHelper["HeartbeatHelper<br/>(Telemetry & Diagnostics)"]
     end
 
     ExtAPI -->|HTTP REST| Router
@@ -62,25 +67,35 @@ flowchart TD
     SES -->|SNS Event POST| Router
 
     Router --> Guard
-    Guard --> CoreServices
-    CoreServices <--> MongoDB
-    CoreServices <--> Queues
-    Queues <--> RedisDB
-    Crons --> CoreServices
+    Guard --> GatewaySvc
+    Guard --> AuthSvc
+    Guard --> BillingSvc
+    GatewaySvc <--> MongoDB
+    GatewaySvc <--> SMSQueue
+    WebhookSvc <--> WHQueue
+    BillingSvc <--> BillQueue
+    SMSQueue <--> RedisDB
+    WHQueue <--> RedisDB
+    BillQueue <--> RedisDB
+    TimeoutTask --> GatewaySvc
+    HeartbeatTask --> GatewaySvc
+    WHRetryTask --> WebhookSvc
+    UserRollupTask --> MongoDB
 
     GatewaySvc -->|Push Dispatch| FCM
     FCM -->|Data Push| FCMReceiver
     FCMReceiver --> WorkMgr
     WorkMgr --> Radio
     Radio -->|Status Report| WorkMgr
-    WorkMgr -->|PATCH /gateway/devices/:id/sms-status| Router
+    WorkMgr -->|"PATCH /gateway/devices/:id/sms-status"| Router
 
-    InboundReceiver -->|POST /gateway/devices/:id/receive-sms| Router
-    HeartbeatHelper -->|POST /gateway/devices/:id/heartbeat| Router
-    HeartbeatHelper -.->|GET /gateway/devices/:id/messages/pending| Router
+    InboundReceiver -->|"POST /gateway/devices/:id/receive-sms"| Router
+    HeartbeatHelper -->|"POST /gateway/devices/:id/heartbeat"| Router
+    HeartbeatHelper -.->|"GET /gateway/devices/:id/messages/pending"| Router
 
     WebhookSvc -->|POST Signed Webhook| ExtAPI
 ```
+</details>
 
 ---
 

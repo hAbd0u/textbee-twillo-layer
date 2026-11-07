@@ -8,26 +8,31 @@ This document provides a comprehensive technical catalog of all message statuses
 
 TextBee models SMS lifecycles through discrete state machines for outbound and inbound messages:
 
+![TextBee Message Lifecycle State Machine](./diagrams/errors-message-state-machine.svg)
+
+<details>
+<summary>View Mermaid Source</summary>
+
 ```mermaid
 stateDiagram-v2
     [*] --> pending: API Request Accepted
 
-    pending --> dispatched: Bull Queue Pops & FCM Push Sent
-    pending --> failed: Validation / Quota / Device Inactive
+    pending --> dispatched: Bull Queue Pops and FCM Push Sent
+    pending --> failed: Validation or Quota or Device Inactive
 
     dispatched --> sent: Android sentIntent (RESULT_OK)
     dispatched --> failed: Android Error (Radio off, No credit, etc.)
-    dispatched --> unknown: Cron Sweep (> 20 min without receipt)
+    dispatched --> unknown: Cron Sweep (over 20 min without receipt)
 
     sent --> delivered: Android deliveryIntent (RESULT_OK)
-    sent --> append_issue: Android deliveryIntent (RESULT_CANCELED)<br/>Status remains 'sent'; issueHistory appended
+    sent --> append_issue: Android deliveryIntent (RESULT_CANCELED)
 
     unknown --> sent: Late Arrival sentIntent callback
     unknown --> delivered: Late Arrival deliveryIntent callback
 
-    %% Inbound path
-    [*] --> received: Android SMSBroadcastReceiver Ingest
+    append_issue --> delivered: Delivery confirmed subsequently
 ```
+</details>
 
 ### 1.1 Outbound Message Status Catalog
 

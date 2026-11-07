@@ -6,29 +6,35 @@ This document provides a comprehensive technical mapping of all database collect
 
 ## 1. Entity-Relationship Overview
 
+![TextBee Entity Relationship Diagram](./diagrams/data-models-er-diagram.svg)
+
+<details>
+<summary>View Mermaid Source</summary>
+
 ```mermaid
 erDiagram
-    User ||--o{ Device : owns
-    User ||--o{ ApiKey : provisions
-    User ||--o{ SMSBatch : dispatches
-    User ||--o{ SMS : owns
-    User ||--o{ WebhookSubscription : registers
-    User ||--o{ Subscription : billed
-    User ||--o{ SupportMessage : files
-    User ||--o{ DashboardNotification : receives
+    User ||--o{ Device : "owns"
+    User ||--o{ ApiKey : "provisions"
+    User ||--o{ SMSBatch : "dispatches"
+    User ||--o{ SMS : "owns"
+    User ||--o{ WebhookSubscription : "registers"
+    User ||--o{ Subscription : "billed"
+    User ||--o{ SupportMessage : "files"
+    User ||--o{ DashboardNotification : "receives"
 
-    Device ||--o{ SMS : transmits
-    Device ||--o| DeviceTombstone : soft_deleted_to
+    Device ||--o{ SMS : "transmits"
+    Device ||--o| DeviceTombstone : "soft-deleted to"
 
-    ApiKey ||--o| ApiKeyTombstone : soft_deleted_to
+    ApiKey ||--o| ApiKeyTombstone : "soft-deleted to"
 
-    SMSBatch ||--|{ SMS : groups
+    SMSBatch ||--|{ SMS : "groups"
 
-    WebhookSubscription ||--o{ WebhookNotification : triggers
-    SMS ||--o{ WebhookNotification : references
+    WebhookSubscription ||--o{ WebhookNotification : "triggers"
+    SMS ||--o{ WebhookNotification : "references"
 
-    Plan ||--o{ Subscription : governs
+    Plan ||--o{ Subscription : "governs"
 ```
+</details>
 
 ---
 
